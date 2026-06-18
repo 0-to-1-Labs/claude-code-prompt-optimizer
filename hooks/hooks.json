@@ -1,0 +1,27 @@
+{
+  "description": "Prompt optimizer: rewrites prompts wrapped in <optimize> tags; bootstraps node dependencies on session start.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bootstrap.sh",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/src/hooks/optimize-prompt.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
