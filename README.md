@@ -152,6 +152,7 @@ You get a structured plan with profiling steps, bottleneck identification, prior
 | `OPTIMIZER_AUTH` | Auth strategy: `auto`, `oauth`, or `apikey` | `auto` |
 | `OPTIMIZER_MODEL` | Override the optimization model | from config |
 | `OPTIMIZER_FALLBACK_MODEL` | Model to retry with if the primary errors | from config |
+| `OPTIMIZER_EFFORT` | Reasoning effort: `low`, `medium`, `high`, `xhigh`, `max` | from config |
 | `OPTIMIZER_TIMEOUT_MS` | Abort + fall back to the original prompt after N ms | from config |
 | `DEBUG` | Enable debug logging | `false` |
 
@@ -159,7 +160,7 @@ Debug logs go to `/tmp/claude-code-hook-debug.log`.
 
 ### Config file
 
-Model, fallback model, timeout, and the system prompt live in
+Model, fallback model, reasoning effort, timeout, and the system prompt live in
 `src/hooks/optimizer.config.json` and `src/hooks/system-prompt.md`, so you can
 tune behavior or bump the model without editing TypeScript. Environment
 variables above take precedence over the config file.
@@ -168,10 +169,16 @@ variables above take precedence over the config file.
 {
   "model": "claude-opus-4-8",
   "fallbackModel": "claude-sonnet-4-6",
-  "timeoutMs": 20000,
+  "effort": "low",
+  "timeoutMs": 30000,
   "systemPromptFile": "system-prompt.md"
 }
 ```
+
+`effort` defaults to `low`: prompt optimization is a single-turn rewrite, not a
+reasoning task, so minimal thinking keeps latency comfortably inside `timeoutMs`
+(higher effort drove Opus 4.8 past the timeout, which fails open to the
+un-optimized prompt). Raise it if you want the optimizer to deliberate more.
 
 ## Project Structure
 
@@ -180,7 +187,7 @@ claude-code-prompt-optimizer/
 ├── src/hooks/
 │   ├── optimize-prompt.ts     # Core optimization logic (Agent SDK)
 │   ├── optimize-prompt.sh     # Shell wrapper (fast-path short-circuit)
-│   ├── optimizer.config.json  # Model, fallback, timeout
+│   ├── optimizer.config.json  # Model, fallback, effort, timeout
 │   └── system-prompt.md       # Editable optimization system prompt
 ├── scripts/
 │   └── install.js             # Automated installer (symlinks into ~/.claude)
