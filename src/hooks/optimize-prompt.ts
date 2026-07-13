@@ -22,9 +22,12 @@ interface HookOutput {
   };
 }
 
+type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 interface OptimizerConfig {
   model: string;
   fallbackModel?: string;
+  effort: EffortLevel;
   timeoutMs: number;
   systemPrompt: string;
 }
@@ -43,6 +46,12 @@ function loadConfig(): OptimizerConfig {
   return {
     model: process.env.OPTIMIZER_MODEL || raw.model,
     fallbackModel: process.env.OPTIMIZER_FALLBACK_MODEL || raw.fallbackModel,
+    // Prompt optimization is a single-turn rewrite, not a reasoning task, so the
+    // default 'high' effort is wasteful — it drives the model past the timeout
+    // (which then fails open to the un-optimized prompt). 'low' keeps adaptive
+    // thinking on but minimal, so responses land well inside timeoutMs and the
+    // reasoning stays in thinking blocks rather than leaking into the rewrite.
+    effort: (process.env.OPTIMIZER_EFFORT || raw.effort || 'low') as EffortLevel,
     timeoutMs: Number(process.env.OPTIMIZER_TIMEOUT_MS) || raw.timeoutMs || 20000,
     systemPrompt,
   };
@@ -108,6 +117,7 @@ function buildCleanEnv(): Record<string, string | undefined> {
 async function runQuery(
   originalPrompt: string,
   model: string,
+  effort: EffortLevel,
   systemPrompt: string,
   env: Record<string, string | undefined>,
   abortController: AbortController,
@@ -116,6 +126,7 @@ async function runQuery(
     prompt: `Original prompt to optimize:\n${originalPrompt}`,
     options: {
       model,
+      effort,
       systemPrompt,
       maxTurns: 1,
       allowedTools: [],
@@ -162,7 +173,7 @@ async function optimizePrompt(originalPrompt: string, config: OptimizerConfig): 
     const abortController = new AbortController();
     const timer = setTimeout(() => abortController.abort(), config.timeoutMs);
     try {
-      const result = await runQuery(originalPrompt, model, config.systemPrompt, env, abortController);
+      const result = await runQuery(originalPrompt, model, config.effort, config.systemPrompt, env, abortController);
       return result || originalPrompt;
     } catch (e) {
       lastErr = e;
