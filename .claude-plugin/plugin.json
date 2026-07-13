@@ -1,0 +1,8 @@
+{
+  "name": "claude-code-prompt-optimizer",
+  "description": "Wrap a prompt in <optimize>...</optimize> and it is rewritten into a sharper prompt before it runs (Claude Opus 4.8). Hook-based (UserPromptSubmit).",
+  "version": "2.0.0",
+  "author": {
+    "name": "John P. Sasser"
+  }
+}
