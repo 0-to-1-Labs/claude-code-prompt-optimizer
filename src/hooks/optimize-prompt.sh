@@ -32,6 +32,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TSX_BIN="$ROOT_DIR/node_modules/.bin/tsx"
 
+# When installed as a Claude Code plugin, `/plugin install` clones the repo but
+# does NOT run `npm install`, so tsx + the Agent SDK are absent. Provision them
+# lazily on the first <optimize> use (one-time cost; cached thereafter). Runs
+# only inside the plugin/repo dir, never against the user's project.
+if [ ! -x "$TSX_BIN" ] && [ -f "$ROOT_DIR/package.json" ]; then
+  [ "$DEBUG" = "true" ] && echo "node_modules missing — bootstrapping deps via npm install" >> "$LOG_FILE"
+  ( cd "$ROOT_DIR" && npm install --omit=dev --no-audit --no-fund ) >>"$LOG_FILE" 2>&1
+fi
+
 # Prefer the pinned local tsx (no npx resolution overhead); fall back to npx.
 if [ -x "$TSX_BIN" ]; then
   printf '%s' "$INPUT" | "$TSX_BIN" "$SCRIPT_DIR/optimize-prompt.ts"
