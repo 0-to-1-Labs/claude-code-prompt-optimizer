@@ -1,6 +1,6 @@
 {
   "name": "claude-code-prompt-optimizer",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "AI-powered prompt optimization hook for Claude Code - rewrites prompts using the same model as your session (OAuth/Claude MAX or API key)",
   "type": "module",
   "main": "src/hooks/optimize-prompt.ts",
