@@ -1,11 +1,12 @@
 {
   "name": "claude-code-prompt-optimizer",
   "version": "2.0.0",
-  "description": "AI-powered prompt optimization hook for Claude Code using Claude Opus 4.8 - supports API key and OAuth/Claude MAX",
+  "description": "AI-powered prompt optimization hook for Claude Code - rewrites prompts using the same model as your session (OAuth/Claude MAX or API key)",
   "type": "module",
   "main": "src/hooks/optimize-prompt.ts",
   "scripts": {
     "install-hook": "node scripts/install.js",
+    "build": "esbuild src/hooks/optimize-prompt.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/optimize-prompt.mjs",
     "test": "tsx src/hooks/optimize-prompt.ts < examples/test-input.json",
     "test:debug": "DEBUG=true bash src/hooks/optimize-prompt.sh < examples/test-input.json"
   },
@@ -19,10 +20,10 @@
     "prompt-optimization",
     "ai",
     "anthropic",
-    "opus-4.8",
     "oauth",
     "claude-max",
-    "hooks"
+    "hooks",
+    "opus-5"
   ],
   "author": "John P. Sasser",
   "license": "MIT",
@@ -36,7 +37,8 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "esbuild": "^0.28.0"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node Version](https://img.shields.io/badge/node-%3E%3D18.0.0-green)](https://nodejs.org)
-[![Anthropic API](https://img.shields.io/badge/Anthropic-Claude%20Opus%204.8-blue)](https://www.anthropic.com)
+[![Anthropic API](https://img.shields.io/badge/Anthropic-Claude%20Opus%205-blue)](https://www.anthropic.com)
 
 A Claude Code hook that transforms simple prompts into detailed, structured instructions. Add `<optimize>` to any prompt and it'll expand your request into something Claude can really sink its teeth into.
 
@@ -160,25 +160,67 @@ Debug logs go to `/tmp/claude-code-hook-debug.log`.
 
 ### Config file
 
-Model, fallback model, reasoning effort, timeout, and the system prompt live in
-`src/hooks/optimizer.config.json` and `src/hooks/system-prompt.md`, so you can
-tune behavior or bump the model without editing TypeScript. Environment
-variables above take precedence over the config file.
+Model selection, per-model time budgets, the prompt-size cap, and the system
+prompt live in `src/hooks/optimizer.config.json` and `src/hooks/system-prompt.md`,
+so you can tune behavior without editing TypeScript. Environment variables above
+take precedence over the config file.
 
 ```json
 {
-  "model": "claude-opus-4-8",
-  "fallbackModel": "claude-sonnet-4-6",
+  "matchSessionModel": true,
+  "model": "claude-opus-5",
   "effort": "low",
-  "timeoutMs": 30000,
+  "maxPromptChars": 12000,
+  "fallbackTimeoutMs": 30000,
+  "defaultPolicy": { "budgetMs": 45000, "fallback": "claude-sonnet-5" },
+  "modelPolicy": {
+    "claude-opus-5":   { "budgetMs": 60000, "fallback": "claude-sonnet-5" },
+    "claude-sonnet-5": { "budgetMs": 40000, "fallback": null }
+  },
   "systemPromptFile": "system-prompt.md"
 }
 ```
 
+**Session-model matching.** With `matchSessionModel` enabled (the default), the
+hook reads `transcript_path` from the hook payload and reuses the model that
+produced the most recent assistant turn — so the prompt is rewritten *by* the
+same model that will execute it, and mid-session `/model` switches are picked up
+automatically. UserPromptSubmit carries no `model` field and there is no
+`$CLAUDE_MODEL`, so the transcript is the only source for this. On the first
+prompt of a session (no assistant turn yet) it falls back to `model`. Set
+`OPTIMIZER_MATCH_SESSION_MODEL=false` to always use `model` instead.
+
+**Timeouts.** Each model gets its own `budgetMs` from `modelPolicy` (Opus needs
+roughly twice Sonnet's wall time for the same rewrite). If the primary times out
+*or* errors, the chain advances to `fallback` with `fallbackTimeoutMs`; only when
+every attempt is exhausted does the hook fail open and pass the prompt through
+unmodified.
+
+> **Keep the inner budgets under the outer hook timeout.** Claude Code lowers the
+> `UserPromptSubmit` command-hook default to **30s**, so `hooks/hooks.json` sets an
+> explicit `"timeout": 120`. `budgetMs + fallbackTimeoutMs` must stay comfortably
+> below that value — if the outer timeout fires first, Claude Code kills the
+> process and the fail-open path never runs.
+
 `effort` defaults to `low`: prompt optimization is a single-turn rewrite, not a
-reasoning task, so minimal thinking keeps latency comfortably inside `timeoutMs`
-(higher effort drove Opus 4.8 past the timeout, which fails open to the
-un-optimized prompt). Raise it if you want the optimizer to deliberate more.
+reasoning task, so minimal thinking keeps latency inside the budget. Raise it if
+you want the optimizer to deliberate more.
+
+`maxPromptChars` (default 12,000) short-circuits very long prompts — a pasted
+document cannot be rewritten inside any sane budget, and attempting it was the
+most reliable way to burn the entire hook timeout for nothing.
+
+### Logs
+
+The hook always writes to `/tmp/claude-code-prompt-optimizer.log` (override with
+`OPTIMIZER_LOG_FILE`), recording the chosen model and its source, elapsed time
+per attempt, timeouts, and fail-open reasons. Prompts without an `<optimize>`
+tag short-circuit before any logging, so the common path stays free.
+
+```
+2026-08-20T04:24:26Z start session=abc chars=1204 model=claude-opus-5 source=session
+2026-08-20T04:25:03Z ok model=claude-opus-5 effort=low ms=36294
+```
 
 ## Project Structure
 
@@ -187,7 +229,7 @@ claude-code-prompt-optimizer/
 ├── src/hooks/
 │   ├── optimize-prompt.ts     # Core optimization logic (Agent SDK)
 │   ├── optimize-prompt.sh     # Shell wrapper (fast-path short-circuit)
-│   ├── optimizer.config.json  # Model, fallback, effort, timeout
+│   ├── optimizer.config.json  # Model matching, per-model budgets, size cap
 │   └── system-prompt.md       # Editable optimization system prompt
 ├── scripts/
 │   └── install.js             # Automated installer (symlinks into ~/.claude)

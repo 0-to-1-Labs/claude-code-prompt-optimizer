@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { readFileSync } from 'fs';
+import { appendFileSync, closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -24,15 +24,48 @@ interface HookOutput {
 
 type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
-interface OptimizerConfig {
-  model: string;
-  fallbackModel?: string;
-  effort: EffortLevel;
-  timeoutMs: number;
-  systemPrompt: string;
+/** Per-model time budget and the cheaper model to retry on if it fails. */
+interface Policy {
+  budgetMs: number;
+  fallback: string | null;
 }
 
-const HOOK_DIR = dirname(fileURLToPath(import.meta.url));
+interface OptimizerConfig {
+  matchSessionModel: boolean;
+  model: string;
+  effort: EffortLevel;
+  maxPromptChars: number;
+  fallbackTimeoutMs: number;
+  defaultPolicy: Policy;
+  modelPolicy: Record<string, Policy>;
+  budgetOverrideMs: number | null;
+  systemPromptTemplate: string;
+}
+
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+
+// Config lives next to the SOURCE file. When running the esbuild bundle from
+// dist/, import.meta.url points at dist/ — fall back to src/hooks/ there.
+const HOOK_DIR =
+  [SCRIPT_DIR, join(SCRIPT_DIR, '..', 'src', 'hooks')].find((dir) =>
+    existsSync(join(dir, 'optimizer.config.json')),
+  ) ?? SCRIPT_DIR;
+const LOG_FILE = process.env.OPTIMIZER_LOG_FILE || '/tmp/claude-code-prompt-optimizer.log';
+
+/**
+ * Append a line to the optimizer log.
+ *
+ * Logging is unconditional (not DEBUG-gated): when the hook fails, Claude Code
+ * shows only a one-line non-blocking error, so the log is the sole record of
+ * which model ran, how long it took, and why it gave up.
+ */
+function log(message: string): void {
+  try {
+    appendFileSync(LOG_FILE, `${new Date().toISOString()} ${message}\n`);
+  } catch {
+    // Never let logging break the hook.
+  }
+}
 
 /**
  * Load configuration from optimizer.config.json (next to this file), with
@@ -41,20 +74,90 @@ const HOOK_DIR = dirname(fileURLToPath(import.meta.url));
  */
 function loadConfig(): OptimizerConfig {
   const raw = JSON.parse(readFileSync(join(HOOK_DIR, 'optimizer.config.json'), 'utf8'));
-  const systemPrompt = readFileSync(join(HOOK_DIR, raw.systemPromptFile), 'utf8').trim();
+  const systemPromptTemplate = readFileSync(join(HOOK_DIR, raw.systemPromptFile), 'utf8').trim();
 
   return {
+    matchSessionModel: process.env.OPTIMIZER_MATCH_SESSION_MODEL
+      ? process.env.OPTIMIZER_MATCH_SESSION_MODEL !== 'false'
+      : raw.matchSessionModel !== false,
     model: process.env.OPTIMIZER_MODEL || raw.model,
-    fallbackModel: process.env.OPTIMIZER_FALLBACK_MODEL || raw.fallbackModel,
     // Prompt optimization is a single-turn rewrite, not a reasoning task, so the
     // default 'high' effort is wasteful — it drives the model past the timeout
     // (which then fails open to the un-optimized prompt). 'low' keeps adaptive
-    // thinking on but minimal, so responses land well inside timeoutMs and the
+    // thinking on but minimal, so responses land well inside the budget and the
     // reasoning stays in thinking blocks rather than leaking into the rewrite.
     effort: (process.env.OPTIMIZER_EFFORT || raw.effort || 'low') as EffortLevel,
-    timeoutMs: Number(process.env.OPTIMIZER_TIMEOUT_MS) || raw.timeoutMs || 20000,
-    systemPrompt,
+    maxPromptChars: Number(process.env.OPTIMIZER_MAX_PROMPT_CHARS) || raw.maxPromptChars || 12000,
+    fallbackTimeoutMs: Number(process.env.OPTIMIZER_FALLBACK_TIMEOUT_MS) || raw.fallbackTimeoutMs || 20000,
+    defaultPolicy: raw.defaultPolicy || { budgetMs: 30000, fallback: null },
+    modelPolicy: raw.modelPolicy || {},
+    // Escape hatch for measuring real latency, and for users on slow links who
+    // would rather wait than lose the optimization.
+    budgetOverrideMs: Number(process.env.OPTIMIZER_BUDGET_MS) || null,
+    systemPromptTemplate,
   };
+}
+
+/** Model ids we are willing to pull out of a transcript, e.g. `claude-opus-5`. */
+const MODEL_ID_PATTERN = /^claude-[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * Recover the session's current model by reading the transcript.
+ *
+ * UserPromptSubmit hook input carries no `model` field and there is no
+ * $CLAUDE_MODEL env var, but it does carry `transcript_path`, and every
+ * assistant record in that JSONL records the model that produced it. Reading
+ * the most recent one lets the optimizer run on the same model that will
+ * execute the optimized prompt — and it tracks mid-session /model switches.
+ *
+ * Only the tail is read: transcripts grow to many megabytes and the hook runs
+ * on the prompt-submit critical path.
+ */
+function detectSessionModel(transcriptPath: string): string | null {
+  const TAIL_BYTES = 512 * 1024;
+
+  try {
+    const size = statSync(transcriptPath).size;
+    if (!size) return null;
+
+    const start = Math.max(0, size - TAIL_BYTES);
+    const length = size - start;
+    const buf = Buffer.alloc(length);
+    const fd = openSync(transcriptPath, 'r');
+    try {
+      readSync(fd, buf, 0, length, start);
+    } finally {
+      closeSync(fd);
+    }
+
+    const lines = buf.toString('utf8').split('\n');
+    // A mid-file offset almost certainly lands inside a record; drop that shard.
+    if (start > 0) lines.shift();
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      let record: any;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      const model = record?.message?.model;
+      // Synthetic assistant records carry model '<synthetic>'; the pattern
+      // rejects those along with anything else that isn't a real model id.
+      if (record?.type === 'assistant' && typeof model === 'string' && MODEL_ID_PATTERN.test(model)) {
+        return model;
+      }
+    }
+  } catch {
+    // Missing/unreadable transcript (e.g. first prompt of a session) — the
+    // caller falls back to the configured default model.
+  }
+
+  return null;
 }
 
 /** Write JSON to stdout and wait for it to flush before exiting. */
@@ -132,6 +235,11 @@ async function runQuery(
       allowedTools: [],
       permissionMode: 'bypassPermissions',
       settingSources: [],
+      // Never initialize MCP servers in the spawned CLI — they are pure
+      // startup cost for a single text-rewrite completion, and they eat the
+      // model's time budget before the first token is generated.
+      mcpServers: {},
+      strictMcpConfig: true,
       abortController,
       env,
       stderr: (data: string) => {
@@ -155,33 +263,64 @@ async function runQuery(
   return result.trim();
 }
 
+/** Resolve the time budget and fallback model for a given primary model. */
+function resolvePolicy(config: OptimizerConfig, model: string): Policy {
+  const policy = config.modelPolicy[model] || config.defaultPolicy;
+  return config.budgetOverrideMs ? { ...policy, budgetMs: config.budgetOverrideMs } : policy;
+}
+
 /**
- * Optimize a prompt, with an overall timeout and a model fallback chain.
+ * Optimize a prompt, trying the session model first and a cheaper sibling second.
  *
- * A timeout aborts and propagates (caller falls back to the original prompt
- * rather than blocking the session). A model error (overload, bad model id)
- * advances to the fallback model before giving up.
+ * A timeout is the single most common failure, so it advances to the fallback
+ * model exactly like any other error rather than aborting the chain — the whole
+ * point of configuring a fallback is that it fires when the primary is too slow.
+ * Only when every attempt is exhausted do we throw, and the caller then fails
+ * open to the unmodified prompt.
  */
-async function optimizePrompt(originalPrompt: string, config: OptimizerConfig): Promise<string> {
+async function optimizePrompt(
+  originalPrompt: string,
+  config: OptimizerConfig,
+  primaryModel: string,
+): Promise<string> {
   const env = buildCleanEnv();
-  const models = [config.model, config.fallbackModel].filter(
-    (m, i, a): m is string => !!m && a.indexOf(m) === i,
-  );
+  const policy = resolvePolicy(config, primaryModel);
+
+  const attempts: Array<{ model: string; budgetMs: number }> = [
+    { model: primaryModel, budgetMs: policy.budgetMs },
+  ];
+  if (policy.fallback && policy.fallback !== primaryModel) {
+    attempts.push({ model: policy.fallback, budgetMs: config.fallbackTimeoutMs });
+  }
 
   let lastErr: unknown;
-  for (const model of models) {
+  for (const attempt of attempts) {
     const abortController = new AbortController();
-    const timer = setTimeout(() => abortController.abort(), config.timeoutMs);
+    const timer = setTimeout(() => abortController.abort(), attempt.budgetMs);
+    const startedAt = Date.now();
+
     try {
-      const result = await runQuery(originalPrompt, model, config.effort, config.systemPrompt, env, abortController);
+      const systemPrompt = config.systemPromptTemplate.replace(/\{\{MODEL\}\}/g, attempt.model);
+      const result = await runQuery(
+        originalPrompt,
+        attempt.model,
+        config.effort,
+        systemPrompt,
+        env,
+        abortController,
+      );
+      log(`ok model=${attempt.model} effort=${config.effort} ms=${Date.now() - startedAt}`);
       return result || originalPrompt;
     } catch (e) {
       lastErr = e;
+      const elapsed = Date.now() - startedAt;
+
       if (abortController.signal.aborted) {
-        throw new Error(`optimization timed out after ${config.timeoutMs}ms`);
+        log(`timeout model=${attempt.model} ms=${elapsed} budget=${attempt.budgetMs}`);
+      } else {
+        const msg = e instanceof Error ? e.message : String(e);
+        log(`error model=${attempt.model} ms=${elapsed}: ${msg}`);
       }
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error(`[optimizer] model ${model} failed, trying fallback: ${msg}`);
     } finally {
       clearTimeout(timer);
     }
@@ -216,10 +355,34 @@ async function main() {
 
     const config = loadConfig();
     const cleanedPrompt = stripOptimizeTag(hookInput.prompt);
-    const optimizedPrompt = await optimizePrompt(cleanedPrompt, config);
+
+    // A pasted document cannot be rewritten inside any sane budget, and trying
+    // is the most reliable way to burn the whole hook timeout for nothing.
+    if (cleanedPrompt.length > config.maxPromptChars) {
+      log(`passthrough chars=${cleanedPrompt.length} max=${config.maxPromptChars}`);
+      await writeAndExit(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: 'UserPromptSubmit',
+            additionalContext: `[prompt-optimizer] Prompt is ${cleanedPrompt.length} characters (limit ${config.maxPromptChars}) — passed through without optimization.`,
+          },
+        } satisfies HookOutput),
+      );
+    }
+
+    const sessionModel = config.matchSessionModel
+      ? detectSessionModel(hookInput.transcript_path)
+      : null;
+    const primaryModel = sessionModel || config.model;
+    log(
+      `start session=${hookInput.session_id} chars=${cleanedPrompt.length} ` +
+        `model=${primaryModel} source=${sessionModel ? 'session' : 'config-default'}`,
+    );
+
+    const optimizedPrompt = await optimizePrompt(cleanedPrompt, config, primaryModel);
 
     console.error('\n------------------------------------------------------------');
-    console.error('PROMPT OPTIMIZER - ULTRATHINK MODE ENABLED');
+    console.error(`PROMPT OPTIMIZER - ${primaryModel}`);
     console.error('------------------------------------------------------------');
     console.error('\nOriginal Prompt:');
     console.error(`   ${cleanedPrompt}`);
@@ -228,7 +391,7 @@ async function main() {
     console.error('\n------------------------------------------------------------\n');
 
     const userMessage = `------------------------------------------------------------
-PROMPT OPTIMIZER - ULTRATHINK MODE ENABLED
+PROMPT OPTIMIZER - ${primaryModel}
 ------------------------------------------------------------
 
 Original Prompt: ${cleanedPrompt}
@@ -249,6 +412,7 @@ ${optimizedPrompt}`;
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
     console.error(`[prompt-optimizer] ERROR: ${errMsg}`);
+    log(`failed: ${errMsg}`);
 
     // Extract original prompt from input if possible
     let originalPrompt = '';

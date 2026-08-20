@@ -9,50 +9,62 @@
 # Read the hook payload from stdin once; reuse it below.
 INPUT=$(cat)
 
-LOG_FILE="/tmp/claude-code-hook-debug.log"
-if [ "$DEBUG" = "true" ]; then
-  echo "=== Hook called at $(date) ===" >> "$LOG_FILE"
-  echo "Working directory: $(pwd)" >> "$LOG_FILE"
-  echo "CLAUDE_CODE_OAUTH_TOKEN set: ${CLAUDE_CODE_OAUTH_TOKEN:+yes}" >> "$LOG_FILE"
-  echo "ANTHROPIC_API_KEY set: ${ANTHROPIC_API_KEY:+yes}" >> "$LOG_FILE"
-fi
+# Logging is unconditional past the fast path. Claude Code surfaces only a
+# one-line non-blocking error when a hook fails, so this file is the only place
+# the real reason (missing Node, timeout, which model ran) is recorded.
+LOG_FILE="${OPTIMIZER_LOG_FILE:-/tmp/claude-code-prompt-optimizer.log}"
+log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [sh] $*" >> "$LOG_FILE" 2>/dev/null; }
 
 # Fast path: no <optimize> tag → emit nothing and let the prompt pass through
-# unchanged. No Node process, no SDK import, no added latency.
+# unchanged. No Node process, no SDK import, no log write, no added latency.
 if ! printf '%s' "$INPUT" | grep -qi '<optimize>'; then
-  [ "$DEBUG" = "true" ] && echo "No <optimize> tag — passthrough (no Node spawn)" >> "$LOG_FILE"
   exit 0
 fi
 
-# Ensure nvm/node is in PATH (Claude Code spawns hooks without an interactive shell)
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
+# Ensure node is in PATH; only pay the nvm sourcing cost when it isn't
+# (Claude Code spawns hooks without an interactive shell).
+if ! command -v node >/dev/null 2>&1; then
+  export NVM_DIR="$HOME/.nvm"
+  [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DIST_BUNDLE="$ROOT_DIR/dist/optimize-prompt.mjs"
 TSX_BIN="$ROOT_DIR/node_modules/.bin/tsx"
+
+# Preflight: without Node there is nothing to run. Fail OPEN with an explicit
+# log line rather than letting the run die on `npx: command not found`, which
+# reaches the user as an opaque non-blocking hook error.
+if [ ! -x "$TSX_BIN" ] && ! command -v node >/dev/null 2>&1; then
+  log "FATAL node not found in PATH ($PATH) and no prebuilt tsx at $TSX_BIN — install Node >=18, then run 'npm install' in $ROOT_DIR. Passing prompt through unoptimized."
+  exit 0
+fi
 
 # When installed as a Claude Code plugin, `/plugin install` clones the repo but
 # does NOT run `npm install`, so tsx + the Agent SDK are absent. Provision them
 # lazily on the first <optimize> use (one-time cost; cached thereafter). Runs
 # only inside the plugin/repo dir, never against the user's project.
 if [ ! -x "$TSX_BIN" ] && [ -f "$ROOT_DIR/package.json" ]; then
-  [ "$DEBUG" = "true" ] && echo "node_modules missing — bootstrapping deps via npm install" >> "$LOG_FILE"
-  ( cd "$ROOT_DIR" && npm install --omit=dev --no-audit --no-fund ) >>"$LOG_FILE" 2>&1
+  log "node_modules missing — bootstrapping deps via npm install"
+  if ! ( cd "$ROOT_DIR" && npm install --omit=dev --no-audit --no-fund ) >>"$LOG_FILE" 2>&1; then
+    log "FATAL npm install failed — passing prompt through unoptimized"
+    exit 0
+  fi
 fi
 
-# Prefer the pinned local tsx (no npx resolution overhead); fall back to npx.
-if [ -x "$TSX_BIN" ]; then
+# Prefer the prebuilt bundle (no TypeScript transpile at hook time — saves
+# seconds of the model's timeout budget); then pinned tsx; then npx as a last
+# resort. Rebuild the bundle with `npm run build` after editing the .ts.
+if [ -f "$DIST_BUNDLE" ] && command -v node >/dev/null 2>&1; then
+  printf '%s' "$INPUT" | node "$DIST_BUNDLE"
+elif [ -x "$TSX_BIN" ]; then
   printf '%s' "$INPUT" | "$TSX_BIN" "$SCRIPT_DIR/optimize-prompt.ts"
 else
   printf '%s' "$INPUT" | npx tsx "$SCRIPT_DIR/optimize-prompt.ts"
 fi
 
 EXIT_CODE=$?
-
-if [ "$DEBUG" = "true" ]; then
-  echo "Hook completed with exit code: $EXIT_CODE" >> "$LOG_FILE"
-  echo "" >> "$LOG_FILE"
-fi
+[ "$EXIT_CODE" -ne 0 ] && log "hook exited non-zero: $EXIT_CODE"
 
 exit $EXIT_CODE

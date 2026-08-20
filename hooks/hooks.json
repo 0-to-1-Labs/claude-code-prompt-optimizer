@@ -5,7 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/src/hooks/optimize-prompt.sh\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/src/hooks/optimize-prompt.sh\"",
+            "timeout": 120
           }
         ]
       }

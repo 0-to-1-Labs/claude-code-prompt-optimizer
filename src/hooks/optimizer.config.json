@@ -1,7 +1,20 @@
 {
-  "model": "claude-opus-4-8",
-  "fallbackModel": "claude-sonnet-4-6",
+  "matchSessionModel": true,
+  "model": "claude-opus-5",
   "effort": "low",
-  "timeoutMs": 30000,
+  "maxPromptChars": 12000,
+  "fallbackTimeoutMs": 30000,
+  "defaultPolicy": { "budgetMs": 45000, "fallback": "claude-sonnet-5" },
+  "modelPolicy": {
+    "claude-fable-5":    { "budgetMs": 75000, "fallback": "claude-sonnet-5" },
+    "claude-mythos-5":   { "budgetMs": 75000, "fallback": "claude-sonnet-5" },
+    "claude-opus-5":     { "budgetMs": 60000, "fallback": "claude-sonnet-5" },
+    "claude-opus-4-8":   { "budgetMs": 60000, "fallback": "claude-sonnet-5" },
+    "claude-opus-4-7":   { "budgetMs": 60000, "fallback": "claude-sonnet-5" },
+    "claude-opus-4-6":   { "budgetMs": 60000, "fallback": "claude-sonnet-5" },
+    "claude-sonnet-5":   { "budgetMs": 40000, "fallback": null },
+    "claude-sonnet-4-6": { "budgetMs": 40000, "fallback": "claude-sonnet-5" },
+    "claude-haiku-4-5":  { "budgetMs": 40000, "fallback": null }
+  },
   "systemPromptFile": "system-prompt.md"
 }
