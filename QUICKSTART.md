@@ -82,7 +82,7 @@ npm list @anthropic-ai/claude-agent-sdk tsx
 
 Expected output (versions track the latest release, so yours will be newer):
 ```
-claude-code-prompt-optimizer@2.2.0
+claude-code-prompt-optimizer@2.2.1
 ├── @anthropic-ai/claude-agent-sdk@0.3.285
 └── tsx@4.23.15
 ```

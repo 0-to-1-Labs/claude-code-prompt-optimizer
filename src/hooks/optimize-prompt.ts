@@ -120,6 +120,30 @@ function loadConfig(): OptimizerConfig {
   };
 }
 
+/**
+ * Name the Agent SDK this process resolved, for the log. Walks up from this
+ * file exactly as ESM resolution does, so it reports the copy that ran — a
+ * stale local node_modules shows up here as an old version and its path.
+ */
+function describeSdk(): string {
+  let dir = SCRIPT_DIR;
+  for (;;) {
+    const pkgFile = join(dir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'package.json');
+    if (existsSync(pkgFile)) {
+      let version = 'unknown';
+      try {
+        version = JSON.parse(readFileSync(pkgFile, 'utf8')).version ?? version;
+      } catch {
+        // Unreadable manifest — the path alone is still useful.
+      }
+      return `sdk=${version} path=${dirname(pkgFile)}`;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return 'sdk=not-found';
+    dir = parent;
+  }
+}
+
 /** Model ids we are willing to pull out of a transcript, e.g. `claude-sonnet-5-5`. */
 const MODEL_ID_PATTERN = /^claude-[a-z0-9][a-z0-9-]*$/;
 
@@ -406,6 +430,9 @@ async function optimizePrompt(
       } else {
         const msg = e instanceof Error ? e.message : String(e);
         log(`error model=${attempt.model} ms=${elapsed}: ${msg}`);
+        if (/does not support this model/i.test(msg)) {
+          log(`sdk-too-old model=${attempt.model} ${describeSdk()} — delete that node_modules so the hook reinstalls the latest SDK`);
+        }
       }
     } finally {
       clearTimeout(timer);

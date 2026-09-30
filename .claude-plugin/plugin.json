@@ -1,7 +1,7 @@
 {
   "name": "claude-code-prompt-optimizer",
   "description": "Wrap a prompt in <optimize>...</optimize> and it is rewritten into a sharper prompt by the same model your session is running. Hook-based (UserPromptSubmit).",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "author": {
     "name": "John P. Sasser"
   },
