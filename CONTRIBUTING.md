@@ -12,7 +12,7 @@ Before creating bug reports, please check existing issues to avoid duplicates. W
 - Steps to reproduce the issue
 - Expected vs actual behavior
 - Your environment (OS, Node.js version, Claude Code version)
-- Any relevant error messages or logs
+- Any relevant error messages or the optimizer log (it holds no prompt text)
 
 ### Suggesting Enhancements
 
@@ -26,11 +26,10 @@ Enhancement suggestions are tracked as GitHub issues. When suggesting an enhance
 ### Pull Requests
 
 1. Fork the repo and create your branch from `main`
-2. If you've added code, add tests
-3. Ensure your code follows the existing style
-4. Make sure your code passes linting
-5. Write a clear commit message
-6. Submit your pull request
+2. Ensure your code follows the existing style
+3. Run the checks below
+4. Write a clear commit message
+5. Submit your pull request
 
 ## Development Setup
 
@@ -39,25 +38,35 @@ Enhancement suggestions are tracked as GitHub issues. When suggesting an enhance
 git clone https://github.com/YOUR_USERNAME/claude-code-prompt-optimizer.git
 cd claude-code-prompt-optimizer
 
-# Install dependencies
+# Install dependencies (including dev tools)
 npm install
 
-# Run tests
+# Type-check and build the bundle
+npm run typecheck
+npm run build
+
+# Fast path check (free, no model call)
 npm test
+
+# Full run against the model (costs money)
+npm run smoke
 ```
+
+`bash -n src/hooks/optimize-prompt.sh` and `shellcheck src/hooks/optimize-prompt.sh`
+should also be clean. Bump `version` in both `package.json` and
+`.claude-plugin/plugin.json` for a release.
 
 ## Code Style
 
 - Use TypeScript for all new code
-- Follow existing formatting (2 spaces, no semicolons in TS)
+- Follow existing formatting (2 spaces, single quotes, semicolons)
 - Add JSDoc comments for public functions
 - Keep functions small and focused
 
 ## Testing
 
-- Write tests for new features
-- Ensure all tests pass before submitting PR
-- Include both success and failure cases
+- There is no automated test suite yet. `npm test` covers the fast path only.
+- Verify a change end to end with one `<optimize>` prompt in Claude Code and read the log.
 
 ## Commit Messages
 

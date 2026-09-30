@@ -36,6 +36,3 @@ coverage/
 tmp/
 temp/
 *.tmp
-
-# Debug files
-/tmp/claude-code-hook-debug.log

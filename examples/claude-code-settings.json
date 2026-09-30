@@ -5,7 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/YOUR_USERNAME/projects/claude-code-prompt-optimizer/src/hooks/optimize-prompt.sh"
+            "command": "/Users/YOUR_USERNAME/projects/claude-code-prompt-optimizer/src/hooks/optimize-prompt.sh",
+            "timeout": 120
           }
         ]
       }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import {
   existsSync,
   readFileSync,
@@ -13,29 +13,24 @@ import {
   renameSync,
   symlinkSync,
 } from 'fs';
-import { createInterface } from 'readline';
 import { join, dirname, resolve } from 'path';
 import { homedir } from 'os';
+import { fileURLToPath } from 'url';
 
-const PROJECT_ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
+// fileURLToPath (not URL.pathname) so a repo path with spaces or non-ASCII
+// characters is decoded instead of left percent-encoded.
+const PROJECT_ROOT = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 const HOOK_SCRIPT = join(PROJECT_ROOT, 'src', 'hooks', 'optimize-prompt.sh');
+const PLUGIN_HOOKS_FILE = join(PROJECT_ROOT, 'hooks', 'hooks.json');
 const CLAUDE_DIR = join(homedir(), '.claude');
 const SETTINGS_FILE = join(CLAUDE_DIR, 'settings.json');
+const INSTALLED_PLUGINS_FILE = join(CLAUDE_DIR, 'plugins', 'installed_plugins.json');
+const PLUGIN_NAME = 'claude-code-prompt-optimizer';
 
 // Single source of truth: ~/.claude/hooks/claude-code-prompt-optimizer is a
 // symlink to this repo, so editing the repo updates the live hook with no copy.
-const INSTALL_LINK = join(CLAUDE_DIR, 'hooks', 'claude-code-prompt-optimizer');
+const INSTALL_LINK = join(CLAUDE_DIR, 'hooks', PLUGIN_NAME);
 const LINKED_HOOK_SCRIPT = join(INSTALL_LINK, 'src', 'hooks', 'optimize-prompt.sh');
-
-function ask(question) {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
-}
 
 function log(msg) {
   console.log(`\x1b[36m[installer]\x1b[0m ${msg}`);
@@ -54,6 +49,14 @@ function fail(msg) {
   process.exit(1);
 }
 
+function readJson(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 // ── Pre-flight checks ──────────────────────────────────────────────
 
 function checkNode() {
@@ -70,8 +73,28 @@ function checkClaude() {
     success(`Claude CLI found: ${version}`);
     return true;
   } catch {
-    warn('Claude CLI not found — OAuth stored login will not be available');
+    warn('Claude CLI not found — install it and run `claude login` before using <optimize>');
     return false;
+  }
+}
+
+/**
+ * The plugin install and this script each register the hook, and Claude Code
+ * runs a plugin's hook separately from a settings.json copy of it. Refuse to
+ * add a second registration when the plugin is already installed.
+ */
+function checkPluginInstall() {
+  const installed = readJson(INSTALLED_PLUGINS_FILE)?.plugins ?? {};
+  const enabled = readJson(SETTINGS_FILE)?.enabledPlugins ?? {};
+  const entries = [...Object.keys(installed), ...Object.keys(enabled)].filter((key) =>
+    key.startsWith(`${PLUGIN_NAME}@`),
+  );
+  if (entries.length) {
+    fail(
+      `${entries[0]} is already installed as a Claude Code plugin. Use one install method, not both — ` +
+        'the plugin and this script would each run the hook on every prompt. ' +
+        `Run \`/plugin uninstall ${entries[0]}\` first if you prefer the script install.`,
+    );
   }
 }
 
@@ -79,70 +102,23 @@ function checkClaude() {
 
 function installDeps() {
   log('Installing dependencies...');
-  execFileSync('npm', ['install'], { cwd: PROJECT_ROOT, stdio: 'inherit' });
+  execFileSync('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {
+    cwd: PROJECT_ROOT,
+    stdio: 'inherit',
+  });
   success('Dependencies installed');
 }
 
-// ── Auth setup ─────────────────────────────────────────────────────
+// ── Auth ───────────────────────────────────────────────────────────
 
-function detectShellProfile() {
-  const shell = process.env.SHELL || '/bin/zsh';
-  if (shell.endsWith('fish')) return join(homedir(), '.config', 'fish', 'config.fish');
-  if (shell.endsWith('bash')) {
-    const bashrc = join(homedir(), '.bashrc');
-    const profile = join(homedir(), '.bash_profile');
-    return existsSync(bashrc) ? bashrc : profile;
-  }
-  return join(homedir(), '.zshrc');
-}
-
-function appendToProfile(line) {
-  const profile = detectShellProfile();
-  const content = existsSync(profile) ? readFileSync(profile, 'utf8') : '';
-  if (content.includes(line)) {
-    log(`Already in ${profile}`);
-    return;
-  }
-  writeFileSync(profile, content + (content.endsWith('\n') ? '' : '\n') + line + '\n');
-  success(`Added to ${profile}`);
-  warn(`Run: source ${profile}  (or open a new terminal)`);
-}
-
-async function setupAuth(hasClaude) {
-  console.log('\n--- Authentication Setup ---\n');
-  console.log('Choose your auth method:\n');
+function explainAuth(hasClaude) {
+  console.log('\n--- Authentication ---\n');
   if (hasClaude) {
-    console.log('  1) Stored OAuth (already logged in via `claude login`) [recommended]');
-  }
-  console.log('  2) OAuth token  (Claude Pro / MAX subscribers)');
-  console.log('  3) API key      (Anthropic API credits)');
-  console.log('');
-
-  const choice = await ask(`Enter choice [${hasClaude ? '1/2/3' : '2/3'}]: `);
-
-  if (choice === '1' && hasClaude) {
-    success('Using stored OAuth from `claude login` — no env vars needed');
-  } else if (choice === '2') {
-    console.log('\nTo get your OAuth token, run:\n  claude auth token\n');
-    const token = await ask('Paste your OAuth token (or press Enter to skip): ');
-    if (token) {
-      appendToProfile(`export CLAUDE_CODE_OAUTH_TOKEN="${token}"`);
-      process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-    } else {
-      warn('Skipped — set CLAUDE_CODE_OAUTH_TOKEN manually later');
-    }
-  } else if (choice === '3') {
-    const key = await ask('Paste your API key (sk-ant-...): ');
-    if (key && !key.startsWith('sk-ant-')) {
-      warn('Key does not start with sk-ant- — double-check it');
-    }
-    if (key) {
-      appendToProfile(`export ANTHROPIC_API_KEY="${key}"`);
-      process.env.ANTHROPIC_API_KEY = key;
-    }
+    console.log('The hook uses your stored Claude Code login (`claude login`). No env vars needed.');
   } else {
-    warn('No auth configured — run `claude login` or set CLAUDE_CODE_OAUTH_TOKEN later');
+    console.log('Install the Claude Code CLI and run `claude login`; the hook uses that stored login.');
   }
+  console.log('API-key users: export ANTHROPIC_API_KEY yourself and set OPTIMIZER_AUTH=apikey. See README.md.\n');
 }
 
 // ── Install hook files (symlink) ───────────────────────────────────
@@ -179,41 +155,57 @@ function installHookFiles() {
 
 // ── Hook configuration ─────────────────────────────────────────────
 
+/** The plugin's hooks.json is the one source of truth for the hook timeout. */
+function hookTimeout() {
+  const timeout = readJson(PLUGIN_HOOKS_FILE)?.hooks?.UserPromptSubmit?.[0]?.hooks?.[0]?.timeout;
+  return typeof timeout === 'number' ? timeout : 120;
+}
+
 function configureHook() {
   log('Configuring Claude Code hook...');
 
   let settings = {};
   if (existsSync(SETTINGS_FILE)) {
-    try {
-      settings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
-    } catch {
+    settings = readJson(SETTINGS_FILE);
+    if (!settings) {
       warn('Could not parse existing settings.json — creating fresh');
+      settings = {};
     }
   }
 
   if (!settings.hooks) settings.hooks = {};
   if (!settings.hooks.UserPromptSubmit) settings.hooks.UserPromptSubmit = [];
 
+  // Claude Code lowers the UserPromptSubmit command-hook default to 30 s,
+  // which is shorter than a rewrite on a large model. Match hooks/hooks.json.
+  const timeout = hookTimeout();
   const hookEntry = {
     hooks: [
       {
         type: 'command',
         command: LINKED_HOOK_SCRIPT,
+        timeout,
       },
     ],
   };
 
-  // Check if hook is already registered
-  const already = settings.hooks.UserPromptSubmit.some((entry) =>
-    entry.hooks?.some((h) => h.command?.includes('optimize-prompt'))
+  // Check if hook is already registered; if so, make sure it has the timeout.
+  const existing = settings.hooks.UserPromptSubmit.flatMap((entry) => entry.hooks ?? []).find((h) =>
+    h.command?.includes('optimize-prompt'),
   );
 
-  if (already) {
-    log('Hook already registered in settings.json');
+  if (existing) {
+    if (existing.timeout !== timeout) {
+      existing.timeout = timeout;
+      writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2) + '\n');
+      success(`Hook already registered — set timeout to ${timeout}s in ${SETTINGS_FILE}`);
+    } else {
+      log('Hook already registered in settings.json');
+    }
   } else {
     settings.hooks.UserPromptSubmit.push(hookEntry);
     writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2) + '\n');
-    success(`Hook added to ${SETTINGS_FILE}`);
+    success(`Hook added to ${SETTINGS_FILE} (timeout ${timeout}s)`);
   }
 }
 
@@ -226,8 +218,12 @@ function setPermissions() {
 
 // ── Verify ─────────────────────────────────────────────────────────
 
+/**
+ * Exercise the fast path only: a prompt without <optimize> must exit 0 with
+ * empty output. A tagged prompt would call the model and cost money.
+ */
 function verify() {
-  log('Running quick verification...');
+  log('Running quick verification (fast path, no model call)...');
   const testInput = JSON.stringify({
     prompt: 'hello world',
     session_id: 'verify',
@@ -236,22 +232,21 @@ function verify() {
   });
 
   try {
-    const result = execFileSync('npx', ['tsx', 'src/hooks/optimize-prompt.ts'], {
+    const result = execFileSync('bash', [HOOK_SCRIPT], {
       cwd: PROJECT_ROOT,
       encoding: 'utf8',
       input: testInput,
       timeout: 15000,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    const parsed = JSON.parse(result.trim());
-    if (parsed.hookSpecificOutput) {
-      success('Verification passed — hook returns valid output');
+    if (result.trim() === '') {
+      success('Verification passed — untagged prompt passes through untouched');
     } else {
-      warn('Unexpected output format — check manually');
+      warn(`Unexpected output for an untagged prompt: ${result.trim().slice(0, 200)}`);
     }
   } catch (err) {
     warn(`Verification failed: ${err.message}`);
-    warn('You can test manually: npm test');
+    warn('Test manually: npm test');
   }
 }
 
@@ -264,9 +259,10 @@ async function main() {
 
   checkNode();
   const hasClaude = checkClaude();
+  checkPluginInstall();
 
   installDeps();
-  await setupAuth(hasClaude);
+  explainAuth(hasClaude);
   installHookFiles();
   configureHook();
   setPermissions();
