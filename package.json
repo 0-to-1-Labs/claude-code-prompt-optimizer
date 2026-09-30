@@ -1,18 +1,18 @@
 {
   "name": "claude-code-prompt-optimizer",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "AI-powered prompt optimization hook for Claude Code - rewrites prompts using the same model as your session (OAuth/Claude MAX or API key)",
   "type": "module",
-  "main": "src/hooks/optimize-prompt.ts",
   "scripts": {
     "install-hook": "node scripts/install.js",
     "build": "esbuild src/hooks/optimize-prompt.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/optimize-prompt.mjs",
-    "test": "tsx src/hooks/optimize-prompt.ts < examples/test-input.json",
-    "test:debug": "DEBUG=true bash src/hooks/optimize-prompt.sh < examples/test-input.json"
+    "typecheck": "tsc --noEmit",
+    "test": "printf '{\"prompt\":\"hello world\",\"session_id\":\"test\",\"transcript_path\":\"/tmp/test\",\"hook_event_name\":\"UserPromptSubmit\"}' | bash src/hooks/optimize-prompt.sh",
+    "smoke": "bash src/hooks/optimize-prompt.sh < examples/test-input.json"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/johnpsasser/claude-code-prompt-optimizer.git"
+    "url": "git+https://github.com/0-to-1-Labs/claude-code-prompt-optimizer.git"
   },
   "keywords": [
     "claude",
@@ -22,18 +22,17 @@
     "anthropic",
     "oauth",
     "claude-max",
-    "hooks",
-    "opus-5"
+    "hooks"
   ],
   "author": "John P. Sasser",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/johnpsasser/claude-code-prompt-optimizer/issues"
+    "url": "https://github.com/0-to-1-Labs/claude-code-prompt-optimizer/issues"
   },
-  "homepage": "https://github.com/johnpsasser/claude-code-prompt-optimizer#readme",
+  "homepage": "https://github.com/0-to-1-Labs/claude-code-prompt-optimizer#readme",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.45",
-    "tsx": "^4.19.0"
+    "@anthropic-ai/claude-agent-sdk": "latest",
+    "tsx": "latest"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
