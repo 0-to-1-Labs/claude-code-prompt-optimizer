@@ -2,9 +2,33 @@
 
 Get the prompt optimizer running in under 5 minutes!
 
-## Automated Install (Recommended)
+## Plugin Marketplace Install (Recommended)
 
-The fastest way to get started:
+The fastest way to get started. In Claude Code:
+
+```
+/plugin marketplace add 0-to-1-Labs/claude-marketplace
+/plugin install claude-code-prompt-optimizer@0-to-1-labs
+```
+
+Then restart Claude Code. That is the whole install:
+
+- The plugin registers the hook for you. Do not edit `~/.claude/settings.json`.
+- Dependencies install the first time you use `<optimize>`. You need Node.js 18+.
+- If you are logged into Claude Code, auth already works. For other options, see
+  [Step 3: Configure Authentication](#step-3-configure-authentication).
+- If a prompt passes through unoptimized, check `/tmp/claude-code-prompt-optimizer.log`.
+- `/plugin update claude-code-prompt-optimizer@0-to-1-labs` handles upgrades.
+
+Skip to [Using the Optimizer](#using-the-optimizer). The rest of the install steps
+in this guide are for the script install below.
+
+Use one install method, not both. The plugin and the script installer each register
+the hook, so both together run it twice.
+
+## Automated Script Install (Alternative)
+
+Without the marketplace:
 
 ```bash
 git clone https://github.com/johnpsasser/claude-code-prompt-optimizer.git
