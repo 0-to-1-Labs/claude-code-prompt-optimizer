@@ -74,15 +74,21 @@ fi
 
 # Dependencies (tsx + Agent SDK, ~200 MB with the SDK's native CLI binary).
 # `/plugin install` does not run `npm install`, so they are provisioned lazily
-# on the first <optimize> use. They live in ${CLAUDE_PLUGIN_DATA} when Claude
-# Code provides it (kept across plugin updates; the plugin root is replaced on
-# every update) and are reached from the plugin root via a node_modules
-# symlink. A script install has no CLAUDE_PLUGIN_DATA and uses the repo itself,
-# as does a repo that already has a real node_modules directory.
-if [ -n "$CLAUDE_PLUGIN_DATA" ] && { [ ! -e "$ROOT_DIR/node_modules" ] || [ -L "$ROOT_DIR/node_modules" ]; }; then
-  DEPS_DIR="$CLAUDE_PLUGIN_DATA"
+# on the first <optimize> use.
+#
+# As a plugin (CLAUDE_PLUGIN_ROOT is set) the hook ALWAYS uses the install in
+# the data dir (kept across plugin updates) and runs a copy of the source from
+# there, so ESM imports resolve against that node_modules. A node_modules/ or
+# dist/ left in the plugin directory — a dev checkout served through a
+# directory marketplace, say — is ignored and can never pin an old SDK whose
+# bundled CLI rejects the session model. Outside a plugin (script install,
+# `npm test`) the repo's own install and bundle are used.
+if [ -n "$CLAUDE_PLUGIN_ROOT" ]; then
+  DEPS_DIR="$DATA_DIR"
+  RUN_DIR="$DATA_DIR/hook"
 else
   DEPS_DIR="$ROOT_DIR"
+  RUN_DIR="$SCRIPT_DIR"
 fi
 NM="$DEPS_DIR/node_modules"
 TSX_BIN="$NM/.bin/tsx"
@@ -115,20 +121,24 @@ if ! deps_ok; then
   log "dependencies installed in $DEPS_DIR"
 fi
 
-# Make the deps reachable from the plugin root (ESM resolution walks up from
-# the .ts file, so NODE_PATH does not help). Re-pointed on every update.
-if [ "$DEPS_DIR" != "$ROOT_DIR" ] && [ "$(readlink "$ROOT_DIR/node_modules" 2>/dev/null)" != "$NM" ]; then
-  ln -sfn "$NM" "$ROOT_DIR/node_modules" || fail_open "cannot link $ROOT_DIR/node_modules to $NM"
+# Plugin mode: refresh the source copy next to the data-dir install (three
+# small files; cheap) so the hook always runs the current plugin version
+# against the data-dir node_modules. Never symlink into the plugin root.
+if [ "$RUN_DIR" != "$SCRIPT_DIR" ]; then
+  mkdir -p "$RUN_DIR"
+  if ! cp -f "$SCRIPT_DIR"/optimize-prompt.ts "$SCRIPT_DIR"/optimizer.config.json "$SCRIPT_DIR"/system-prompt.md "$RUN_DIR/"; then
+    fail_open "cannot copy the hook source to $RUN_DIR"
+  fi
 fi
 
-# Prefer the prebuilt bundle (no TypeScript transpile at hook time — saves
-# seconds of the model's timeout budget); otherwise the pinned tsx. Never
-# `npx`: that would download and run code from the registry at hook time.
-# Rebuild the bundle with `npm run build` after editing the .ts.
-if [ -f "$DIST_BUNDLE" ]; then
+# Outside a plugin, prefer the prebuilt bundle (no TypeScript transpile at
+# hook time); otherwise the pinned tsx. Never `npx`: that would download and
+# run code from the registry at hook time. Rebuild the bundle with
+# `npm run build` after editing the .ts.
+if [ "$RUN_DIR" = "$SCRIPT_DIR" ] && [ -f "$DIST_BUNDLE" ]; then
   OUTPUT=$(printf '%s' "$INPUT" | node "$DIST_BUNDLE")
 else
-  OUTPUT=$(printf '%s' "$INPUT" | "$TSX_BIN" "$SCRIPT_DIR/optimize-prompt.ts")
+  OUTPUT=$(printf '%s' "$INPUT" | "$TSX_BIN" "$RUN_DIR/optimize-prompt.ts")
 fi
 EXIT_CODE=$?
 

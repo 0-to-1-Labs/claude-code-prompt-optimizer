@@ -297,7 +297,7 @@ The optimizer uses the Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) which
 
 **Prompt passes through unoptimized:**
 - The log names the reason: timeout, SDK error, missing Node, or a failed dependency install
-- `does not support this model`: the installed SDK is older than your session model. Delete `node_modules` under the plugin data dir (or run `npm update` in the repo) so the hook reinstalls the latest SDK
+- `does not support this model`: the SDK that ran is older than your session model. The next log line (`sdk-too-old ... sdk=<version> path=<dir>`) names it. Delete that `node_modules` so the hook reinstalls the latest SDK. As a plugin the hook always runs from the data dir; a `node_modules/` or `dist/` in the plugin directory is ignored
 
 **Auth errors:**
 - Verify `claude login` works
