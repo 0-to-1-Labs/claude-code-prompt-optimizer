@@ -30,6 +30,21 @@ Basically, it does the prompt engineering for you.
 
 ## Quick Install
 
+### Plugin marketplace (recommended)
+
+In Claude Code:
+
+```
+/plugin marketplace add 0-to-1-Labs/claude-marketplace
+/plugin install claude-code-prompt-optimizer@0-to-1-labs
+```
+
+Then restart Claude Code. The plugin registers the hook for you and installs its
+dependencies the first time you use `<optimize>`. Set up auth as described in
+[Authentication](#authentication).
+
+### Alternative: standalone install (no marketplace)
+
 ```bash
 git clone https://github.com/johnpsasser/claude-code-prompt-optimizer.git
 cd claude-code-prompt-optimizer
@@ -37,6 +52,9 @@ npm run install-hook
 ```
 
 The installer handles dependencies, auth setup, hook configuration, and verification.
+
+Use one method, not both. The installer adds the hook to `~/.claude/settings.json`,
+and the plugin registers its own copy, so both together run the hook twice.
 
 ## Authentication
 
