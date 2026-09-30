@@ -14,11 +14,13 @@ The fastest way to get started. In Claude Code:
 Then restart Claude Code. That is the whole install:
 
 - The plugin registers the hook for you. Do not edit `~/.claude/settings.json`.
-- Dependencies install the first time you use `<optimize>`. You need Node.js 18+.
-- If you are logged into Claude Code, auth already works. For other options, see
+- Dependencies install the first time you use `<optimize>` (about 200 MB, kept in
+  `~/.claude/plugins/data/claude-code-prompt-optimizer/` across updates). You need Node.js 18+.
+- If you are logged into Claude Code, auth already works. API-key users, see
   [Step 3: Configure Authentication](#step-3-configure-authentication).
-- If a prompt passes through unoptimized, check `/tmp/claude-code-prompt-optimizer.log`.
-- `/plugin update claude-code-prompt-optimizer@0-to-1-labs` handles upgrades.
+- If a prompt passes through unoptimized, check
+  `~/.claude/plugins/data/claude-code-prompt-optimizer/optimizer.log`.
+- To get updates automatically, see [Keep the plugin updated](README.md#keep-the-plugin-updated) in the README.
 
 Skip to [Using the Optimizer](#using-the-optimizer). The rest of the install steps
 in this guide are for the script install below.
@@ -31,31 +33,27 @@ the hook, so both together run it twice.
 Without the marketplace:
 
 ```bash
-git clone https://github.com/johnpsasser/claude-code-prompt-optimizer.git
+git clone https://github.com/0-to-1-Labs/claude-code-prompt-optimizer.git
 cd claude-code-prompt-optimizer
 npm run install-hook
 ```
 
 The installer will:
-1. Check prerequisites (Node.js, Claude CLI)
+1. Check prerequisites (Node.js, Claude CLI) and refuse to run if the plugin is already installed
 2. Install dependencies
-3. Walk you through auth setup
-4. Configure the hook in `~/.claude/settings.json`
+3. Link the repo into `~/.claude/hooks`
+4. Configure the hook in `~/.claude/settings.json` with a 120 s timeout
 5. Set file permissions
-6. Run a quick verification
+6. Run a quick verification (fast path only, no model call)
 
 If you prefer manual setup, continue below.
 
 ## Pre-flight Checklist
 
 Before starting, ensure you have:
-- Claude Code CLI installed
+- Claude Code CLI installed and logged in (`claude login`)
 - Node.js 18.0.0+ (`node --version`)
-- npm or yarn package manager
-- **One of the following:**
-  - `CLAUDE_CODE_OAUTH_TOKEN` (Claude Pro/MAX subscribers), OR
-  - `ANTHROPIC_API_KEY` (API credit users), OR
-  - Stored OAuth from `claude login`
+- npm
 
 ## Step-by-Step Installation
 
@@ -66,7 +64,7 @@ Before starting, ensure you have:
 cd ~/projects  # or wherever you keep your code
 
 # Clone the repository
-git clone https://github.com/johnpsasser/claude-code-prompt-optimizer.git
+git clone https://github.com/0-to-1-Labs/claude-code-prompt-optimizer.git
 
 # Enter the project directory
 cd claude-code-prompt-optimizer
@@ -76,26 +74,24 @@ cd claude-code-prompt-optimizer
 
 ```bash
 # Install required packages
-npm install
+npm install --omit=dev
 
 # Verify installation
 npm list @anthropic-ai/claude-agent-sdk tsx
 ```
 
-Expected output:
+Expected output (versions track the latest release, so yours will be newer):
 ```
-claude-code-prompt-optimizer@2.1.0
-├── @anthropic-ai/claude-agent-sdk@0.2.45
-└── tsx@4.19.0
+claude-code-prompt-optimizer@2.2.0
+├── @anthropic-ai/claude-agent-sdk@0.3.285
+└── tsx@4.23.15
 ```
 
 ### Step 3: Configure Authentication
 
-Choose **one** of the following options:
+#### Option A: Stored login (Recommended)
 
-#### Option A: Stored OAuth (Recommended — Already Logged In)
-
-No env vars needed! If you're logged into Claude Code, the Agent SDK uses your stored credentials automatically.
+No env vars needed. If you're logged into Claude Code, the Agent SDK uses your stored credentials automatically.
 
 Just verify you're logged in:
 ```bash
@@ -106,56 +102,14 @@ claude --version
 claude
 ```
 
-#### Option B: OAuth Token (For Claude Pro/MAX Subscribers)
+#### Option B: API Key (For API Credit Users)
 
-If you want to explicitly set a token:
+Export `ANTHROPIC_API_KEY` the way you already do for other tools, and set
+`OPTIMIZER_AUTH=apikey` so the hook keeps it inside a Claude Code session.
 
-**Get your token:**
-```bash
-claude auth token
-```
-
-**Quick Test (Current Session Only):**
-```bash
-export CLAUDE_CODE_OAUTH_TOKEN="your-oauth-token"
-```
-
-**Permanent (Add to Shell Profile):**
-
-For **zsh** (default on macOS):
-```bash
-echo 'export CLAUDE_CODE_OAUTH_TOKEN="your-oauth-token"' >> ~/.zshrc
-source ~/.zshrc
-```
-
-For **bash**:
-```bash
-echo 'export CLAUDE_CODE_OAUTH_TOKEN="your-oauth-token"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-#### Option C: API Key (For API Credit Users)
-
-**Quick Test (Current Session Only):**
-```bash
-export ANTHROPIC_API_KEY="sk-ant-api03-..."
-```
-
-**Permanent (Add to Shell Profile):**
-
-For **zsh** (default on macOS):
-```bash
-echo 'export ANTHROPIC_API_KEY="sk-ant-api03-..."' >> ~/.zshrc
-source ~/.zshrc
-```
-
-For **bash**:
-```bash
-echo 'export ANTHROPIC_API_KEY="sk-ant-api03-..."' >> ~/.bashrc
-source ~/.bashrc
-```
-
-**Auth priority:** `CLAUDE_CODE_OAUTH_TOKEN` > `ANTHROPIC_API_KEY` > stored OAuth from `claude login`.
+Do not paste tokens or keys into your shell profile for this plugin. A long-lived
+credential in `~/.zshrc` is exported to every process you start and often ends up
+in a dotfiles repo.
 
 ### Step 4: Configure Claude Code Hook
 
@@ -180,7 +134,8 @@ nano ~/.claude/settings.json
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/claude-code-prompt-optimizer/src/hooks/optimize-prompt.sh"
+            "command": "/absolute/path/to/claude-code-prompt-optimizer/src/hooks/optimize-prompt.sh",
+            "timeout": 120
           }
         ]
       }
@@ -189,7 +144,9 @@ nano ~/.claude/settings.json
 }
 ```
 
-**Important**: Replace `/absolute/path/to/` with your actual path!
+**Important**: Replace `/absolute/path/to/` with your actual path, and keep the
+`timeout`. Claude Code's default for this hook is 30 s, which is shorter than a
+rewrite on a large model.
 
 To get the correct path:
 ```bash
@@ -206,32 +163,29 @@ chmod +x src/hooks/optimize-prompt.sh
 
 ### Step 6: Test the Installation
 
-1. **Create a test file:**
-```bash
-cat > test-input.json << 'EOF'
-{
-  "prompt": "<optimize> write a hello world function",
-  "session_id": "test-session",
-  "transcript_path": "/tmp/test",
-  "hook_event_name": "UserPromptSubmit"
-}
-EOF
-```
+The free check: an untagged prompt must pass through with no output.
 
-2. **Run the test:**
 ```bash
 npm test
 ```
 
-You should see:
+The full check calls the model (and costs money):
+
+```bash
+npm run smoke
+```
+
+You should see something like:
 ```
 ------------------------------------------------------------
-PROMPT OPTIMIZER - ULTRATHINK MODE ENABLED
+PROMPT OPTIMIZER - claude-sonnet-5-5
 ------------------------------------------------------------
 
-Original Prompt: write a hello world function
+Original Prompt:
+   create a user authentication system with JWT tokens
 
-Optimized Prompt: [Enhanced version will appear here]
+Optimized Prompt:
+   [Enhanced version will appear here]
 ```
 
 ## Using the Optimizer
@@ -246,9 +200,9 @@ Simply add `<optimize>` to any prompt:
 
 The optimizer will:
 1. Detect the `<optimize>` tag
-2. Send your prompt to Claude via the Agent SDK
-3. Return an enhanced, structured version
-4. Execute the optimized prompt
+2. Send your prompt to the session model via the Agent SDK, framed as text to rewrite
+3. Return an enhanced, structured version to Claude Code as additional context
+4. Claude Code shows you the rewrite and the main model continues with it
 
 ### Examples
 
@@ -270,16 +224,15 @@ The optimizer will:
 
 ## Configuration Options
 
-### Enable Debug Mode
+### Logs
 
-For troubleshooting, enable debug logging:
+The hook always logs metadata (never prompt text) to
+`~/.claude/plugins/data/claude-code-prompt-optimizer/optimizer.log` for a plugin
+install, or `~/.cache/claude-code-prompt-optimizer/optimizer.log` for a script
+install. Override with `OPTIMIZER_LOG_FILE`.
 
 ```bash
-# In your shell profile
-export DEBUG=true
-
-# Check debug logs
-tail -f /tmp/claude-code-hook-debug.log
+tail -f ~/.cache/claude-code-prompt-optimizer/optimizer.log
 ```
 
 ### Custom Installation Paths
@@ -304,7 +257,7 @@ sudo chmod 755 /opt/claude-code-prompt-optimizer/src/hooks/optimize-prompt.sh
 cat ~/.claude/settings.json
 ```
 
-**Check 2: Test hook directly**
+**Check 2: Test hook directly (calls the model)**
 ```bash
 echo '{"prompt": "<optimize> test", "session_id": "test", "transcript_path": "/tmp/test", "hook_event_name": "UserPromptSubmit"}' | bash src/hooks/optimize-prompt.sh
 ```
@@ -327,9 +280,18 @@ echo "API key: ${ANTHROPIC_API_KEY:+set}"
 
 If neither is set, ensure `claude login` has been run successfully. The SDK will use your stored login credentials.
 
+### Model Not Supported
+
+**Error in the log:** `does not support this model; version X or newer is required`
+
+The installed Agent SDK bundles a Claude Code binary older than your session model.
+Delete the `node_modules` directory next to the log file (plugin install) or run
+`npm update` in the repo (script install). The hook reinstalls the latest SDK on the
+next `<optimize>`.
+
 ### Node.js Issues
 
-**Error:** "npx: command not found"
+**Error:** "node not found in PATH"
 
 Install Node.js 18+:
 ```bash
@@ -355,18 +317,21 @@ echo "$PWD/src/hooks/optimize-prompt.sh"
 
 ## Updating the Optimizer
 
+Plugin install: see [Keep the plugin updated](README.md#keep-the-plugin-updated).
+
+Script install:
+
 ```bash
 cd claude-code-prompt-optimizer
 git pull origin main
-npm install
+npm install --omit=dev
 ```
 
 ## Testing Without Claude Code
 
-Test the optimizer standalone:
+Test the optimizer standalone (calls the model):
 
 ```bash
-# Interactive test
 node -e "
 const input = {
   prompt: '<optimize> create a REST API',
@@ -375,7 +340,7 @@ const input = {
   hook_event_name: 'UserPromptSubmit'
 };
 console.log(JSON.stringify(input));
-" | npx tsx src/hooks/optimize-prompt.ts
+" | bash src/hooks/optimize-prompt.sh
 ```
 
 ## Verification Checklist
@@ -384,10 +349,10 @@ Run through this checklist to ensure everything works:
 
 - [ ] Node.js 18+ installed (`node --version`)
 - [ ] Repository cloned and dependencies installed
-- [ ] Authentication configured (OAuth token, API key, or `claude login`)
-- [ ] Claude Code settings.json configured with correct path
+- [ ] Logged in with `claude login` (or `ANTHROPIC_API_KEY` + `OPTIMIZER_AUTH=apikey`)
+- [ ] Claude Code settings.json configured with correct path and `"timeout": 120`
 - [ ] Hook script has execute permissions
-- [ ] Test command runs successfully
+- [ ] `npm test` exits 0 with no output
 - [ ] `<optimize>` tag triggers in Claude Code
 
 ## Pro Tips
@@ -402,17 +367,16 @@ Run through this checklist to ensure everything works:
    <optimize> create a secure API with rate limiting and JWT auth
    ```
 
-3. **Debug specific optimizations:**
+3. **See what each run cost:**
    ```bash
-   export DEBUG=true
-   # Now all optimizations will be logged
+   grep ' ok ' ~/.cache/claude-code-prompt-optimizer/optimizer.log
    ```
 
 ## Getting Help
 
-- **GitHub Issues:** [Report bugs or request features](https://github.com/johnpsasser/claude-code-prompt-optimizer/issues)
-- **Discussions:** [Ask questions and share tips](https://github.com/johnpsasser/claude-code-prompt-optimizer/discussions)
-- **Debug Logs:** Check `/tmp/claude-code-hook-debug.log` with DEBUG=true
+- **GitHub Issues:** [Report bugs or request features](https://github.com/0-to-1-Labs/claude-code-prompt-optimizer/issues)
+- **Discussions:** [Ask questions and share tips](https://github.com/0-to-1-Labs/claude-code-prompt-optimizer/discussions)
+- **Logs:** See [Logs](#logs) above
 
 ---
 
